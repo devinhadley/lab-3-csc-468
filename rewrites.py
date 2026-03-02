@@ -3,24 +3,24 @@ from typing import List, Set, Union, cast
 from query_plan_ast import Join, Predicates, PlanNode, Project, Scan, Select
 
 
+# Predicate parsing helpers...
 def _predicate_attrs(predicate: Predicates) -> Set[str]:
-    """
-    Predicate parsing helpers...
-    """
     return {item for item in predicate if isinstance(item, str) and "." in item}
 
 
-def _subtree_relations(node: PlanNode) -> Set[str]:
+def get_subtree_relations(node: PlanNode) -> Set[str]:
     """
-    I return the relaations found in the sub tree by traversing until I find scan.
+    I return the relaations found in the sub tree by traversing until I find scan and propogate up the relation.
     """
-    if isinstance(node, Scan):
-        return {node.relation}
-    if isinstance(node, (Select, Project)):
-        return _subtree_relations(node.child)
-    if isinstance(node, Join):
-        return _subtree_relations(node.left) | _subtree_relations(node.right)
-    return set()
+    match node:
+        case Scan(relation=r):
+            return {r}
+        case Select(child=c) | Project(child=c):
+            return get_subtree_relations(c)
+        case Join(left=l, right=r):
+            return get_subtree_relations(l) | get_subtree_relations(r)
+        case _:
+            return set()
 
 
 def _attrs_for_relations(attrs: Set[str], relations: Set[str]) -> Set[str]:
@@ -76,63 +76,66 @@ def pushdown_selections(root: PlanNode) -> PlanNode:
         return cast(Predicates, combined)
 
     def rewrite(node: PlanNode) -> PlanNode:
-        if isinstance(node, Select):
-            child = rewrite(node.child)
-            if isinstance(child, Select):
-                merged = combine_conjuncts(
-                    split_conjuncts(node.predicate) + split_conjuncts(child.predicate)
-                )
-                return rewrite(Select(predicate=merged, child=child.child))
-            if isinstance(child, Project):
-                predicate_attr_set = _predicate_attrs(node.predicate)
-                if predicate_attr_set.issubset(set(child.attrs)):
-                    pushed = Select(predicate=node.predicate, child=child.child)
-                    return Project(attrs=child.attrs, child=rewrite(pushed))
-                return Select(predicate=node.predicate, child=child)
-
-            if isinstance(child, Join):
-                left_relations = _subtree_relations(child.left)
-                right_relations = _subtree_relations(child.right)
-                left_preds: List[Predicates] = []
-                right_preds: List[Predicates] = []
-                other_preds: List[Predicates] = []
-
-                for predicate in split_conjuncts(node.predicate):
-                    rels = predicate_relations(predicate)
-                    if rels and rels.issubset(left_relations):
-                        left_preds.append(predicate)
-                    elif rels and rels.issubset(right_relations):
-                        right_preds.append(predicate)
-                    else:
-                        other_preds.append(predicate)
-                new_left = child.left
-                new_right = child.right
-                if left_preds:
-                    new_left = rewrite(
-                        Select(predicate=combine_conjuncts(left_preds), child=new_left)
-                    )
-                if right_preds:
-                    new_right = rewrite(
-                        Select(
-                            predicate=combine_conjuncts(right_preds), child=new_right
+        match node:
+            case Select(predicate=pred, child=raw_child):
+                child = rewrite(raw_child)
+                match child:
+                    case Select():
+                        merged = combine_conjuncts(
+                            split_conjuncts(pred) + split_conjuncts(child.predicate)
                         )
-                    )
-                joined = Join(condition=child.condition, left=new_left, right=new_right)
-                if other_preds:
-                    return Select(
-                        predicate=combine_conjuncts(other_preds), child=joined
-                    )
-                return joined
-            return Select(predicate=node.predicate, child=child)
-        if isinstance(node, Project):
-            return Project(attrs=node.attrs, child=rewrite(node.child))
-        if isinstance(node, Join):
-            return Join(
-                condition=node.condition,
-                left=rewrite(node.left),
-                right=rewrite(node.right),
-            )
-        return node
+                        return rewrite(Select(predicate=merged, child=child.child))
+                    case Project(attrs=attrs):
+                        if _predicate_attrs(pred).issubset(set(attrs)):
+                            pushed = Select(predicate=pred, child=child.child)
+                            return Project(attrs=attrs, child=rewrite(pushed))
+                        return Select(predicate=pred, child=child)
+                    case Join(condition=cond, left=left, right=right):
+                        left_relations = get_subtree_relations(left)
+                        right_relations = get_subtree_relations(right)
+                        left_preds: List[Predicates] = []
+                        right_preds: List[Predicates] = []
+                        other_preds: List[Predicates] = []
+
+                        for p in split_conjuncts(pred):
+                            rels = predicate_relations(p)
+                            if rels and rels.issubset(left_relations):
+                                left_preds.append(p)
+                            elif rels and rels.issubset(right_relations):
+                                right_preds.append(p)
+                            else:
+                                other_preds.append(p)
+
+                        new_left = left
+                        new_right = right
+                        if left_preds:
+                            new_left = rewrite(
+                                Select(
+                                    predicate=combine_conjuncts(left_preds),
+                                    child=new_left,
+                                )
+                            )
+                        if right_preds:
+                            new_right = rewrite(
+                                Select(
+                                    predicate=combine_conjuncts(right_preds),
+                                    child=new_right,
+                                )
+                            )
+                        joined = Join(condition=cond, left=new_left, right=new_right)
+                        if other_preds:
+                            return Select(
+                                predicate=combine_conjuncts(other_preds), child=joined
+                            )
+                        return joined
+                    case _:
+                        return Select(predicate=pred, child=child)
+            case Project(attrs=attrs, child=c):
+                return Project(attrs=attrs, child=rewrite(c))
+            case Join(condition=cond, left=l, right=r):
+                return Join(condition=cond, left=rewrite(l), right=rewrite(r))
+            case _:
+                return node
 
     return rewrite(root)
 
@@ -144,40 +147,36 @@ def pushdown_projections(root: PlanNode) -> PlanNode:
     """
 
     def rewrite(node: PlanNode, collected_attrs: Set[str]) -> PlanNode:
-        if isinstance(node, Project):
-            child_attrs = set(collected_attrs) | set(node.attrs)
-            return Project(attrs=node.attrs, child=rewrite(node.child, child_attrs))
+        match node:
+            case Project(attrs=attrs, child=c):
+                child_attrs = collected_attrs | set(attrs)
+                return Project(attrs=attrs, child=rewrite(c, child_attrs))
+            case Select(predicate=pred, child=c):
+                child_attrs = collected_attrs | _predicate_attrs(pred)
+                return Select(predicate=pred, child=rewrite(c, child_attrs))
+            case Join(condition=cond, left=l, right=r):
+                condition_attrs = _predicate_attrs(cond)
+                left_relations = get_subtree_relations(l)
+                right_relations = get_subtree_relations(r)
 
-        if isinstance(node, Select):
-            child_attrs = set(collected_attrs) | _predicate_attrs(node.predicate)
-            return Select(
-                predicate=node.predicate, child=rewrite(node.child, child_attrs)
-            )
+                left_attrs = _attrs_for_relations(collected_attrs, left_relations)
+                left_attrs |= _attrs_for_relations(condition_attrs, left_relations)
 
-        if isinstance(node, Join):
-            condition_attrs = _predicate_attrs(node.condition)
-            left_relations = _subtree_relations(node.left)
-            right_relations = _subtree_relations(node.right)
+                right_attrs = _attrs_for_relations(collected_attrs, right_relations)
+                right_attrs |= _attrs_for_relations(condition_attrs, right_relations)
 
-            left_attrs = _attrs_for_relations(collected_attrs, left_relations)
-            left_attrs |= _attrs_for_relations(condition_attrs, left_relations)
-
-            right_attrs = _attrs_for_relations(collected_attrs, right_relations)
-            right_attrs |= _attrs_for_relations(condition_attrs, right_relations)
-
-            return Join(
-                condition=node.condition,
-                left=rewrite(node.left, left_attrs),
-                right=rewrite(node.right, right_attrs),
-            )
-
-        if isinstance(node, Scan):
-            attrs = sorted(_attrs_for_relations(collected_attrs, {node.relation}))
-            if not attrs:
+                return Join(
+                    condition=cond,
+                    left=rewrite(l, left_attrs),
+                    right=rewrite(r, right_attrs),
+                )
+            case Scan(relation=rel):
+                attrs = sorted(_attrs_for_relations(collected_attrs, {rel}))
+                if not attrs:
+                    return node
+                return Project(attrs=attrs, child=node)
+            case _:
                 return node
-            return Project(attrs=attrs, child=node)
-
-        return node
 
     return rewrite(root, set())
 
@@ -187,16 +186,18 @@ def join_commutativity(root: PlanNode) -> PlanNode | None:
     Copy the tree as is until we find join, swap left and right and return new tree.
     Returns None if no join found.
     """
-    if isinstance(root, Join):
-        return Join(condition=root.condition, left=root.right, right=root.left)
-    if isinstance(root, Select):
-        new_child = join_commutativity(root.child)
-        if new_child is None:
+    match root:
+        case Join(condition=cond, left=l, right=r):
+            return Join(condition=cond, left=r, right=l)
+        case Select(predicate=pred, child=c):
+            new_child = join_commutativity(c)
+            if new_child is None:
+                return None
+            return Select(predicate=pred, child=new_child)
+        case Project(attrs=attrs, child=c):
+            new_child = join_commutativity(c)
+            if new_child is None:
+                return None
+            return Project(attrs=attrs, child=new_child)
+        case _:
             return None
-        return Select(predicate=root.predicate, child=new_child)
-    if isinstance(root, Project):
-        new_child = join_commutativity(root.child)
-        if new_child is None:
-            return None
-        return Project(attrs=root.attrs, child=new_child)
-    return None
