@@ -1,19 +1,19 @@
-from typing import Any, List, Set, Union, cast
+from typing import List, Set, Union, cast
 
 from query_plan_ast import Join, Predicates, PlanNode, Project, Scan, Select
 
 
-def _predicate_attrs(predicate: Any) -> Set[str]:
-    attrs: Set[str] = set()
-    if isinstance(predicate, list):
-        for item in predicate:
-            attrs |= _predicate_attrs(item)
-    elif isinstance(predicate, str) and "." in predicate:
-        attrs.add(predicate)
-    return attrs
+def _predicate_attrs(predicate: Predicates) -> Set[str]:
+    """
+    Predicate parsing helpers...
+    """
+    return {item for item in predicate if isinstance(item, str) and "." in item}
 
 
 def _subtree_relations(node: PlanNode) -> Set[str]:
+    """
+    I return the relaations found in the sub tree by traversing until I find scan.
+    """
     if isinstance(node, Scan):
         return {node.relation}
     if isinstance(node, (Select, Project)):
@@ -29,11 +29,14 @@ def _attrs_for_relations(attrs: Set[str], relations: Set[str]) -> Set[str]:
     }
 
 
-# Recursively rewrites the child and performs pushdown for current node.
-# If a pushdown occurs for current node, we rewrite the modified child again.
-# Includes helpers for splitting and combining conjuctions.
 def pushdown_selections(root: PlanNode) -> PlanNode:
-    def predicate_relations(predicate: Any) -> Set[str]:
+    """
+    Recursively rewrites the child and performs pushdown for current node.
+    If a pushdown occurs for current node, we rewrite the modified child again.
+    Includes helpers for splitting and combining conjuctions.
+    """
+
+    def predicate_relations(predicate: Predicates) -> Set[str]:
         return {attr.split(".", 1)[0] for attr in _predicate_attrs(predicate)}
 
     def split_conjuncts(predicate: Predicates) -> List[Predicates]:
@@ -134,9 +137,12 @@ def pushdown_selections(root: PlanNode) -> PlanNode:
     return rewrite(root)
 
 
-# Traverse down each path in the tree collecting attributes we need as we go.
-# Once we encounter leaf (scan) then add the projection over it.
 def pushdown_projections(root: PlanNode) -> PlanNode:
+    """
+    Traverse down each path in the tree collecting attributes we need as we go.
+    Once we encounter leaf (scan) then add the projection over it.
+    """
+
     def rewrite(node: PlanNode, collected_attrs: Set[str]) -> PlanNode:
         if isinstance(node, Project):
             child_attrs = set(collected_attrs) | set(node.attrs)
@@ -174,3 +180,23 @@ def pushdown_projections(root: PlanNode) -> PlanNode:
         return node
 
     return rewrite(root, set())
+
+
+def join_commutativity(root: PlanNode) -> PlanNode | None:
+    """
+    Copy the tree as is until we find join, swap left and right and return new tree.
+    Returns None if no join found.
+    """
+    if isinstance(root, Join):
+        return Join(condition=root.condition, left=root.right, right=root.left)
+    if isinstance(root, Select):
+        new_child = join_commutativity(root.child)
+        if new_child is None:
+            return None
+        return Select(predicate=root.predicate, child=new_child)
+    if isinstance(root, Project):
+        new_child = join_commutativity(root.child)
+        if new_child is None:
+            return None
+        return Project(attrs=root.attrs, child=new_child)
+    return None
