@@ -1,6 +1,7 @@
 import unittest
 
-from query_plan_ast import Join, Project, Scan, Select, pushdown_selections
+from query_plan_ast import Join, Project, Scan, Select
+from rewrites import pushdown_selections
 
 
 class TestSelectionPushdown(unittest.TestCase):
