@@ -1,0 +1,6 @@
+{
+  "op": "Join",
+  "condition": ["Student.sid", "=", "Enroll.sid"],
+  "left": { "op": "Scan", "relation": "Student" },
+  "right": { "op": "Scan", "relation": "Enroll" }
+}

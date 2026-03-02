@@ -1,0 +1,8 @@
+{
+  "op": "Select",
+  "predicate": ["Student.major", "=", "CS"],
+  "child": {
+    "op": "Scan",
+    "relation": "Student"
+  }
+}

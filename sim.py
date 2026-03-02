@@ -2,9 +2,16 @@ import argparse
 
 from query_plan_ast import parse_plan_file, print_plan_bfs
 
+# TODO:
+#    - Selection Pushdown
+#    - Combine Selections
+#    - Projection Pushdown
+#    - Join Commutativity
 
-def main() -> None:
+
+def get_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Parse a query into an AST")
+
     parser.add_argument(
         "--query",
         required=True,
@@ -16,11 +23,15 @@ def main() -> None:
         help="Print parsed plan using BFS",
     )
 
-    args = parser.parse_args()
-    plan = parse_plan_file(args.query)
+    return parser
+
+
+def main() -> None:
+    args = get_arg_parser().parse_args()
+    logical_plan = parse_plan_file(args.query)
 
     if args.debug:
-        print_plan_bfs(plan)
+        print_plan_bfs(logical_plan)
 
 
 if __name__ == "__main__":
