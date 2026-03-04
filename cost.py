@@ -72,7 +72,7 @@ def get_logical_cost(node: PlanNode, stats: dict) -> float:
             v_left = stats[left_rel]["V"][relation_to_attrs[left_rel][0]]
             v_right = stats[right_rel]["V"][relation_to_attrs[right_rel][0]]
 
-            return math.ceil(l_in * r_in / max(v_left, v_right))
+            return max(1, l_in * r_in / max(v_left, v_right))
 
         case Scan(relation=rltn):
             return stats[rltn]["T"]

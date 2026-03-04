@@ -18,11 +18,6 @@ def get_arg_parser() -> argparse.ArgumentParser:
         help="Path to query JSON file",
     )
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Print parsed plan using BFS",
-    )
-    parser.add_argument(
         "--relations",
         default="files/relations.json",
         help="Path to relations JSON file",
