@@ -11,8 +11,6 @@ Predicates = List[Union[str, int]]
 class PlanNode:
     @staticmethod
     def from_json(data: Dict[str, Any]) -> "PlanNode":
-        if not isinstance(data, dict):
-            raise TypeError("Plan JSON must be an object")
         op = data.get("op")
         if op == "Scan":
             return Scan.from_json(data)

@@ -32,7 +32,7 @@ def _eval_predicate(record: dict, predicate: list) -> bool:
         lhs, op, rhs = cond[0], cond[1], cond[2]
         lval = record[lhs] if isinstance(lhs, str) and "." in lhs else lhs
         rval = record[rhs] if isinstance(rhs, str) and "." in rhs else rhs
-        if op == "=" and lval != rval:
+        if lval != rval:
             return False
     return True
 
@@ -44,6 +44,7 @@ class PhysicalSeqScan(PhysicalPlanNode):
     _pages: list = field(default_factory=list, repr=False, compare=False)
     _page_idx: int = field(default=0, repr=False, compare=False)
     _rec_idx: int = field(default=0, repr=False, compare=False)
+    _pages_read: int = field(default=0, repr=False, compare=False)
 
     def open(self, relations: dict, indexes: dict) -> None:
         rel = relations[self.relation]
@@ -51,11 +52,14 @@ class PhysicalSeqScan(PhysicalPlanNode):
         self._pages = rel["pages"]
         self._page_idx = 0
         self._rec_idx = 0
+        self._pages_read = 0
 
     def next(self) -> dict | None:
         while self._page_idx < len(self._pages):
             page = self._pages[self._page_idx]
             if self._rec_idx < len(page):
+                if self._rec_idx == 0:
+                    self._pages_read += 1
                 raw = page[self._rec_idx]
                 self._rec_idx += 1
                 return {
@@ -80,6 +84,7 @@ class PhysicalHashScan(PhysicalPlanNode):
     value: Any
     _schema: list = field(default_factory=list, repr=False, compare=False)
     _matching_records: list = field(default_factory=list, repr=False, compare=False)
+    _pages_read: int = field(default=0, repr=False, compare=False)
 
     def open(self, relations: dict, indexes: dict) -> None:
         rel = relations[self.relation]
@@ -94,6 +99,7 @@ class PhysicalHashScan(PhysicalPlanNode):
             idx = indexes.get((self.relation, self.attribute))
 
         matching_pages = idx.lookup(self.value) if idx else list(range(len(pages)))
+        self._pages_read = len(matching_pages)
 
         self._matching_records = []
         attr_pos = self._schema.index(attr)
@@ -165,7 +171,6 @@ class PhysicalHashJoin(PhysicalPlanNode):
     _probe_list: list = field(default_factory=list, repr=False, compare=False)
 
     def _join_key(self, record: dict) -> Any:
-        # Extract the left join attribute value from the condition
         for token in self.condition:
             if isinstance(token, str) and "." in token and token in record:
                 return record[token]
@@ -173,13 +178,11 @@ class PhysicalHashJoin(PhysicalPlanNode):
 
     def open(self, relations: dict, indexes: dict) -> None:
         self.left.open(relations, indexes)
-        # Materialize left side into hash table keyed by join attribute value
         self._hash_table = {}
         while True:
             rec = self.left.next()
             if rec is None:
                 break
-            # Find which condition attribute is in this record
             key = None
             for token in self.condition:
                 if isinstance(token, str) and "." in token and token in rec:
@@ -264,3 +267,20 @@ class PhysicalNestedLoopJoin(PhysicalPlanNode):
         self._inner_open = False
         self._relations = {}
         self._indexes = {}
+
+
+def count_pages_read(node: PhysicalPlanNode) -> int:
+    total = 0
+    if isinstance(node, (PhysicalSeqScan, PhysicalHashScan)):
+        total += node._pages_read
+    if hasattr(node, "child"):
+        total += count_pages_read(node.child)
+    if hasattr(node, "left"):
+        total += count_pages_read(node.left)
+    if hasattr(node, "right"):
+        total += count_pages_read(node.right)
+    if hasattr(node, "outer"):
+        total += count_pages_read(node.outer)
+    if hasattr(node, "inner"):
+        total += count_pages_read(node.inner)
+    return total

@@ -134,7 +134,7 @@ def get_physical_cost(
 
             card_left = get_logical_cost(lft, stats)
             card_right = get_logical_cost(rht, stats)
-            nlj_cost = left_cost + card_left * math.ceil(card_right / 2)
+            nlj_cost = left_cost + card_left * right_cost
 
             best_cost, best_plan = min(
                 (hash_cost, PhysicalHashJoin(best_left, best_right, cond)),
