@@ -5,12 +5,12 @@ from pathlib import Path
 from hash_index import HashIndex
 from query_plan_ast import parse_plan_file, print_plan_bfs, Scan, Select, Project, Join
 from rewrites import join_commutativity, pushdown_projections, pushdown_selections
-from cost import get_physical_cost, get_logical_cost, _load_stats
+from cost import get_physical_cost, get_logical_cost, load_stats
 from physical_plan_ast import count_pages_read
 
 
 def get_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Parse a query into an AST")
+    parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--query",
@@ -88,7 +88,7 @@ def main() -> None:
     print_plan_bfs(logical_plan)
     print()
 
-    stats = _load_stats()
+    stats = load_stats()
 
     print("-- Estimated Cardinality --")
     _print_cardinality_tree(logical_plan, stats)
