@@ -72,7 +72,7 @@ def get_logical_cost(node: PlanNode, stats: dict) -> float:
             v_left = stats[left_rel]["V"][relation_to_attrs[left_rel][0]]
             v_right = stats[right_rel]["V"][relation_to_attrs[right_rel][0]]
 
-            return l_in * r_in / max(v_left, v_right)
+            return math.ceil(l_in * r_in / max(v_left, v_right))
 
         case Scan(relation=rltn):
             return stats[rltn]["T"]
@@ -123,7 +123,7 @@ def get_physical_cost(
                     return PhysicalFilter(best_child, pred), child_cost
 
         case Project(attrs=proj_attrs, child=chld):
-            best_child, child_cost = get_physical_cost(chld, stats)
+            best_child, child_cost = get_physical_cost(chld, stats, predicate)
             return PhysicalProject(best_child, proj_attrs), child_cost
 
         case Join(condition=cond, left=lft, right=rht):
