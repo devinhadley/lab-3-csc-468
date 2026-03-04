@@ -3,6 +3,7 @@ import unittest
 from query_plan_ast import Join, Project, Scan, Select
 from cost import get_logical_cost
 
+
 STATS = {
     "Student": {
         "T": 1000,
